@@ -1,42 +1,122 @@
 <!DOCTYPE html>
-<html lang="id">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <title>bunyi jemari</title>
+  <title>Gesture Music App</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      background: #111;
-    }
-    video {
-      transform: scaleX(-1);
-      width: 640px;
-      height: 480px;
-    }
-    canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      pointer-events: none;
-    }
+    canvas { border: 1px solid #ccc; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 </head>
 <body>
-  <video id="webcam" autoplay muted></video>
+  <video id="webcam" autoplay playsinline style="display: none;"></video>
   <canvas id="output"></canvas>
 
-  <!-- MediaPipe Scripts -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
-  
-  <!-- Your Code -->
-  <script src="app.js"></script>
+  <script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('output');
+    const ctx = canvas.getContext('2d');
+
+    const GESTURE_TO_NOTE = {
+      point_one: 261.63,  // Do - C4
+      point_two: 293.66,  // Re - D4
+      ok_sign: 329.63,    // Mi - E4
+      rock_sign: 349.23,  // Fa - F4
+      open_palm: 392.00,  // So - G4
+      thumb_up: 440.00,   // La - A4
+      v_sign: 493.88      // Si - B4
+    };
+
+    let currentGesture = null;
+
+    const hands = new Hands({
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(video, {
+      onFrame: async () => await hands.send({ image: video }),
+      width: 640,
+      height: 480
+    });
+    camera.start();
+
+    function onResults(results) {
+      canvas.width = results.imageWidth;
+      canvas.height = results.imageHeight;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        drawLandmarks(ctx, landmarks, { color: 'lime', lineWidth: 2 });
+
+        const gesture = classifyGesture(landmarks);
+        if (gesture && gesture !== currentGesture) {
+          currentGesture = gesture;
+          playNote(GESTURE_TO_NOTE[gesture]);
+          console.log("🎵 Gesture:", gesture);
+        }
+      } else {
+        currentGesture = null;
+      }
+    }
+
+    function classifyGesture(landmarks) {
+      const isFingerUp = (tip, pip) => landmarks[tip].y < landmarks[pip].y;
+
+      const thumbTip = landmarks[4];
+      const indexTip = landmarks[8];
+      const middleTip = landmarks[12];
+      const ringTip = landmarks[16];
+      const pinkyTip = landmarks[20];
+
+      const indexUp = isFingerUp(8, 6);
+      const middleUp = isFingerUp(12, 10);
+      const ringUp = isFingerUp(16, 14);
+      const pinkyUp = isFingerUp(20, 18);
+      const thumbUp = landmarks[4].x < landmarks[3].x; // left of base
+
+      const fingersUp = [indexUp, middleUp, ringUp, pinkyUp].filter(Boolean).length;
+
+      const touching = (a, b) => {
+        const dx = landmarks[a].x - landmarks[b].x;
+        const dy = landmarks[a].y - landmarks[b].y;
+        return Math.hypot(dx, dy) < 0.05;
+      };
+
+      if (indexUp && !middleUp && !ringUp && !pinkyUp) return 'point_one';
+      if (indexUp && middleUp && !ringUp && !pinkyUp) return 'point_two';
+      if (touching(4, 8)) return 'ok_sign'; // thumb touching index
+      if (indexUp && pinkyUp && !middleUp && !ringUp) return 'rock_sign';
+      if (indexUp && middleUp && ringUp && pinkyUp && thumbUp) return 'open_palm';
+      if (thumbUp && !indexUp && !middleUp && !ringUp && !pinkyUp) return 'thumb_up';
+      if (thumbUp && indexUp && !middleUp && !ringUp && !pinkyUp) return 'v_sign';
+
+      return null;
+    }
+
+    function playNote(freq) {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.type = 'sine';
+      oscillator.frequency.value = freq;
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.5);
+    }
+  </script>
 </body>
 </html>
