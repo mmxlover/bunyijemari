@@ -1,35 +1,37 @@
 <!DOCTYPE html>
-<html>
+<html lang="id">
 <head>
-  <title>Gesture Music App</title>
-  <style>
-    canvas { border: 1px solid #ccc; }
-  </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bunyi Jemari</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 </head>
 <body>
-  <video id="webcam" autoplay playsinline style="display: none;"></video>
-  <canvas id="output"></canvas>
+  <div id="container">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="output"></canvas>
+  </div>
 
   <script>
     const video = document.getElementById('webcam');
     const canvas = document.getElementById('output');
     const ctx = canvas.getContext('2d');
 
-    const GESTURE_TO_NOTE = {
-      point_one: 261.63,  // Do - C4
-      point_two: 293.66,  // Re - D4
-      ok_sign: 329.63,    // Mi - E4
-      rock_sign: 349.23,  // Fa - F4
-      open_palm: 392.00,  // So - G4
-      thumb_up: 440.00,   // La - A4
-      v_sign: 493.88      // Si - B4
+    const NOTE_MAP = {
+      do: 261.63,      // C4
+      re: 293.66,      // D4
+      mi: 329.63,      // E4
+      fa: 349.23,      // F4
+      so: 392.00,      // G4
+      la: 440.00,      // A4
+      si: 493.88,      // B4
+      do_high: 523.25, // C5
     };
 
     let currentGesture = null;
 
+    // MediaPipe Hands Setup
     const hands = new Hands({
       locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
     });
@@ -44,79 +46,143 @@
     hands.onResults(onResults);
 
     const camera = new Camera(video, {
-      onFrame: async () => await hands.send({ image: video }),
+      onFrame: async () => {
+        await hands.send({ image: video });
+      },
       width: 640,
       height: 480
     });
+
     camera.start();
 
+    video.addEventListener('loadeddata', () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    });
+
+    // Function to classify raised fingers based on landmarks
+    function getRaisedFingers(landmarks) {
+      const raisedFingers = [];
+      const fingerTips = [8, 12, 16, 20]; // index, middle, ring, pinky
+      const fingerBase = [7, 11, 15, 19]; // finger joints
+
+      fingerTips.forEach((tip, idx) => {
+        if (landmarks[tip].y < landmarks[fingerBase[idx]].y) {
+          raisedFingers.push(['index', 'middle', 'ring', 'pinky'][idx]);
+        }
+      });
+
+      // Check if thumb is raised
+      if (landmarks[4].y < landmarks[3].y) {
+        raisedFingers.push('thumb');
+      }
+
+      return raisedFingers;
+    }
+
+    // Gesture Mapping
+    function mapGesture(raisedFingers) {
+      const gestureMap = {
+        do: ['index'],
+        re: ['index', 'middle'],
+        mi: ['index', 'ring'],
+        fa: ['index', 'middle', 'ring'],
+        so: ['index', 'middle', 'ring', 'pinky'],
+        la: ['thumb'],
+        si: ['thumb', 'index'],
+        do_high: ['thumb', 'index', 'middle']
+      };
+
+      // Match the gesture with the most specific one
+      for (const [note, fingers] of Object.entries(gestureMap)) {
+        if (arraysEqual(fingers.sort(), raisedFingers.sort())) {
+          return note;
+        }
+      }
+      return null;
+    }
+
+    // Function to compare two arrays
+    function arraysEqual(a, b) {
+      return a.length === b.length && a.every((val, index) => val === b[index]);
+    }
+
+    // Function to handle results from hand tracking
     function onResults(results) {
-      canvas.width = results.imageWidth;
-      canvas.height = results.imageHeight;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         const landmarks = results.multiHandLandmarks[0];
-        drawLandmarks(ctx, landmarks, { color: 'lime', lineWidth: 2 });
+        drawLandmarks(landmarks);
 
-        const gesture = classifyGesture(landmarks);
+        const raisedFingers = getRaisedFingers(landmarks);
+        const gesture = mapGesture(raisedFingers);
+
         if (gesture && gesture !== currentGesture) {
+          console.log("Gesture:", gesture);
+          playNote(NOTE_MAP[gesture]);
           currentGesture = gesture;
-          playNote(GESTURE_TO_NOTE[gesture]);
-          console.log("🎵 Gesture:", gesture);
         }
       } else {
         currentGesture = null;
       }
     }
 
-    function classifyGesture(landmarks) {
-      const isFingerUp = (tip, pip) => landmarks[tip].y < landmarks[pip].y;
-
-      const thumbTip = landmarks[4];
-      const indexTip = landmarks[8];
-      const middleTip = landmarks[12];
-      const ringTip = landmarks[16];
-      const pinkyTip = landmarks[20];
-
-      const indexUp = isFingerUp(8, 6);
-      const middleUp = isFingerUp(12, 10);
-      const ringUp = isFingerUp(16, 14);
-      const pinkyUp = isFingerUp(20, 18);
-      const thumbUp = landmarks[4].x < landmarks[3].x; // left of base
-
-      const fingersUp = [indexUp, middleUp, ringUp, pinkyUp].filter(Boolean).length;
-
-      const touching = (a, b) => {
-        const dx = landmarks[a].x - landmarks[b].x;
-        const dy = landmarks[a].y - landmarks[b].y;
-        return Math.hypot(dx, dy) < 0.05;
-      };
-
-      if (indexUp && !middleUp && !ringUp && !pinkyUp) return 'point_one';
-      if (indexUp && middleUp && !ringUp && !pinkyUp) return 'point_two';
-      if (touching(4, 8)) return 'ok_sign'; // thumb touching index
-      if (indexUp && pinkyUp && !middleUp && !ringUp) return 'rock_sign';
-      if (indexUp && middleUp && ringUp && pinkyUp && thumbUp) return 'open_palm';
-      if (thumbUp && !indexUp && !middleUp && !ringUp && !pinkyUp) return 'thumb_up';
-      if (thumbUp && indexUp && !middleUp && !ringUp && !pinkyUp) return 'v_sign';
-
-      return null;
+    // Draw landmarks on canvas
+    function drawLandmarks(landmarks) {
+      ctx.strokeStyle = 'lime';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < landmarks.length; i++) {
+        const x = landmarks[i].x * canvas.width;
+        const y = landmarks[i].y * canvas.height;
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, 2 * Math.PI);
+        ctx.stroke();
+      }
     }
 
-    function playNote(freq) {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Function to play the note
+    function playNote(frequency) {
+      const audioCtx = new AudioContext();
       const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
+      const gain = audioCtx.createGain();
 
       oscillator.type = 'sine';
-      oscillator.frequency.value = freq;
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-
+      oscillator.frequency.value = frequency;
+      oscillator.connect(gain);
+      gain.connect(audioCtx.destination);
       oscillator.start();
-      oscillator.stop(audioCtx.currentTime + 0.5);
+      oscillator.stop(audioCtx.currentTime + 0.5); // Play for 0.5s
     }
   </script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      height: 100%;
+      background: #000;
+    }
+
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    canvas {
+      pointer-events: none;
+    }
+  </style>
 </body>
 </html>
